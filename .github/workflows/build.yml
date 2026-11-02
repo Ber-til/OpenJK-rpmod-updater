@@ -1,0 +1,111 @@
+name: build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+      - run: cargo build --release
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/openjk-rpmod-updater.exe dist/OpenJK-rpmod-Updater.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/OpenJK-rpmod-Updater.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Libraries for the window
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -y install libxkbcommon-dev libgl1-mesa-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+      - run: cargo test
+      - run: cargo build --release
+      - name: Package
+        run: |
+          mkdir dist
+          cp target/release/openjk-rpmod-updater dist/OpenJK-rpmod-Updater
+          chmod +x dist/OpenJK-rpmod-Updater
+          tar -C dist -czf OpenJK-rpmod-Updater-linux.tar.gz OpenJK-rpmod-Updater
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: OpenJK-rpmod-Updater-linux.tar.gz
+          if-no-files-found: error
+
+  macos:
+    name: macOS (universal)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: cargo test
+      - run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+      - name: Package as an app
+        run: |
+          APP="OpenJK-rpmod Updater.app"
+          mkdir -p "$APP/Contents/MacOS"
+          lipo -create -output "$APP/Contents/MacOS/openjk-rpmod-updater" \
+            target/aarch64-apple-darwin/release/openjk-rpmod-updater \
+            target/x86_64-apple-darwin/release/openjk-rpmod-updater
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          cat > "$APP/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>OpenJK-rpmod Updater</string>
+            <key>CFBundleDisplayName</key><string>OpenJK-rpmod Updater</string>
+            <key>CFBundleIdentifier</key><string>com.ber-til.openjk-rpmod-updater</string>
+            <key>CFBundleExecutable</key><string>openjk-rpmod-updater</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          EOF
+          ditto -c -k --keepParent "$APP" OpenJK-rpmod-Updater-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: OpenJK-rpmod-Updater-macos.zip
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            windows/OpenJK-rpmod-Updater.exe
+            linux/OpenJK-rpmod-Updater-linux.tar.gz
+            macos/OpenJK-rpmod-Updater-macos.zip

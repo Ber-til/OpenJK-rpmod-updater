@@ -1,0 +1,29 @@
+[package]
+name = "openjk-rpmod-updater"
+version = "0.1.0"
+edition = "2024"
+description = "Installs and updates OpenJK-rpmod"
+license = "GPL-2.0"
+
+[dependencies]
+dirs = "7.0.0"
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "links"] }
+egui_commonmark = "0.26.0"
+flate2 = "1.1.10"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
+tar = "0.4.46"
+ureq = "3.5.0"
+zip = { version = "9.2.1", default-features = false, features = ["deflate-flate2"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
