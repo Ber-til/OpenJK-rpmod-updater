@@ -1,11 +1,14 @@
 name: build
 
+# only for release tags (and by hand from the Actions tab), to keep Actions use down
 on:
   push:
-    branches: ['**']
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
+
+env:
+  # the tag is the version the updater shows and compares; Cargo.toml's when run by hand
+  UPDATER_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
 
 jobs:
   windows:
@@ -66,11 +69,13 @@ jobs:
       - name: Package as an app
         run: |
           APP="OpenJK-rpmod Updater.app"
-          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp assets/icon.icns "$APP/Contents/Resources/icon.icns"
           lipo -create -output "$APP/Contents/MacOS/openjk-rpmod-updater" \
             target/aarch64-apple-darwin/release/openjk-rpmod-updater \
             target/x86_64-apple-darwin/release/openjk-rpmod-updater
-          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          VERSION=${UPDATER_VERSION#v}
+          [ -n "$VERSION" ] || VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           cat > "$APP/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -80,6 +85,7 @@ jobs:
             <key>CFBundleDisplayName</key><string>OpenJK-rpmod Updater</string>
             <key>CFBundleIdentifier</key><string>com.ber-til.openjk-rpmod-updater</string>
             <key>CFBundleExecutable</key><string>openjk-rpmod-updater</string>
+            <key>CFBundleIconFile</key><string>icon</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleVersion</key><string>${VERSION}</string>
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>

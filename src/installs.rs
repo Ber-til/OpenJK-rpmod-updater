@@ -215,7 +215,6 @@ fn candidates() -> Vec<PathBuf> {
         if !root.exists() {
             continue;
         }
-        out.push(root.join("JKA"));
         for pf in ["Program Files (x86)", "Program Files"] {
             out.push(root.join(pf).join("LucasArts").join("Star Wars Jedi Knight Jedi Academy"));
             out.push(root.join(pf).join("Steam").join("steamapps").join("common").join("Jedi Academy"));
@@ -231,7 +230,6 @@ fn candidates() -> Vec<PathBuf> {
     if let Some(home) = dirs::home_dir() {
         let steam = home.join("Library/Application Support/Steam");
         steam_game(steam_libraries(&steam), &mut out);
-        out.push(home.join("JKA"));
         subdirs(&home, 3, &mut out);
     }
     out.push(PathBuf::from("/Applications"));
@@ -251,7 +249,6 @@ fn candidates() -> Vec<PathBuf> {
         ] {
             steam_game(steam_libraries(&home.join(steam)), &mut out);
         }
-        out.push(home.join("JKA"));
         subdirs(&home, 3, &mut out);
     }
     for dir in ["/opt", "/usr/local/games", "/usr/games"] {

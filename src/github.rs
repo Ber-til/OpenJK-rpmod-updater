@@ -40,7 +40,10 @@ pub struct Release {
 impl Release {
     /// the download for this computer
     pub fn asset(&self) -> Option<&Asset> {
-        let name = crate::installs::asset_name();
+        self.asset_named(&crate::installs::asset_name())
+    }
+
+    pub fn asset_named(&self, name: &str) -> Option<&Asset> {
         self.assets.iter().find(|a| a.name == name)
     }
 }
@@ -58,9 +61,14 @@ fn unescape(text: &str) -> String {
     text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
 }
 
-/// the releases, newest first; drafts, pre-releases and tags that aren't versions left out
+/// OpenJK-rpmod's releases, newest first
 pub fn releases() -> Result<Vec<Release>, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=50");
+    releases_of(REPO)
+}
+
+/// a repository's releases, newest first; drafts, pre-releases and tags that aren't versions left out
+pub fn releases_of(repo: &str) -> Result<Vec<Release>, String> {
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=50");
     let mut response = agent(Some(Duration::from_secs(20)))
         .get(&url)
         .header("User-Agent", USER_AGENT)

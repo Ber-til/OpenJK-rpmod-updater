@@ -4,6 +4,8 @@
 //! - OpenJK-rpmod already there: up to date, or the changes since and an Update button
 //! - not there: Install, into the one Jedi Academy found, or the one picked when there are more
 //!
+//! When the updater itself has a newer release, it offers that first.
+//!
 //! `--install <GameData>` goes straight to that folder (how it restarts as administrator).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -11,6 +13,7 @@
 mod github;
 mod install;
 mod installs;
+mod self_update;
 mod version;
 
 use eframe::egui;
@@ -29,16 +32,20 @@ enum Stage {
     Checking,
     /// GitHub couldn't be asked
     Offline(String),
+    /// the updater has a newer release
+    NewUpdater(Release),
     Ready,
     Working { what: String, fraction: f32, detail: String },
     Done { message: String, first: bool },
-    Failed { message: String, admin: Option<PathBuf> },
+    Failed { message: String, admin: Option<PathBuf>, link: Option<&'static str> },
 }
 
 struct Shared {
     stage: Stage,
     releases: Vec<Release>,
     installs: Vec<Install>,
+    /// the updater's own releases, for what's new in it
+    own_releases: Vec<Release>,
 }
 
 struct App {
@@ -55,7 +62,7 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, forced: Option<PathBuf>) -> App {
         style(&cc.egui_ctx);
         let app = App {
-            shared: Arc::new(Mutex::new(Shared { stage: Stage::Checking, releases: Vec::new(), installs: Vec::new() })),
+            shared: Arc::new(Mutex::new(Shared { stage: Stage::Checking, releases: Vec::new(), installs: Vec::new(), own_releases: Vec::new() })),
             selected: 0,
             forced,
             pick_error: None,
@@ -77,12 +84,18 @@ impl App {
                 None => installs::find(),
             };
             let releases = github::releases();
+            // not when restarted as administrator: it was offered already
+            let own = if forced.is_none() { github::releases_of(self_update::REPO).unwrap_or_default() } else { Vec::new() };
             let mut s = shared.lock().unwrap();
             s.installs = found;
             match releases {
                 Ok(r) if !r.is_empty() => {
                     s.releases = r;
-                    s.stage = Stage::Ready;
+                    s.stage = match self_update::newer(&own) {
+                        Some(newer) => Stage::NewUpdater(newer),
+                        None => Stage::Ready,
+                    };
+                    s.own_releases = own;
                 }
                 Ok(_) => s.stage = Stage::Offline("GitHub has no OpenJK-rpmod release yet".into()),
                 Err(e) => s.stage = Stage::Offline(e),
@@ -96,6 +109,7 @@ impl App {
             self.shared.lock().unwrap().stage = Stage::Failed {
                 message: "Jedi Academy is running. Close it, then try again.".into(),
                 admin: None,
+                link: None,
             };
             return;
         }
@@ -115,20 +129,7 @@ impl App {
 
         std::thread::spawn(move || {
             let result = install::install(&release, &game_data, first, |step| {
-                let (fraction, detail) = match step {
-                    install::Step::Downloading { done, total } => (
-                        0.85 * done as f32 / total.max(1) as f32,
-                        format!("Downloading... {:.1} of {:.1} MB", done as f64 / 1e6, total as f64 / 1e6),
-                    ),
-                    install::Step::Unpacking { done, total } => {
-                        (0.85 + 0.15 * done as f32 / total.max(1) as f32, format!("Putting the files in place... {done} of {total}"))
-                    }
-                };
-                if let Stage::Working { fraction: f, detail: d, .. } = &mut shared.lock().unwrap().stage {
-                    *f = fraction;
-                    *d = detail;
-                }
-                ctx.request_repaint();
+                progress(&shared, &ctx, step);
             });
 
             let mut s = shared.lock().unwrap();
@@ -150,9 +151,41 @@ impl App {
                 Err(install::Failure::NeedsAdmin(m)) => Stage::Failed {
                     message: format!("This folder needs administrator rights to change.\n\n{m}"),
                     admin: Some(game_data),
+                    link: None,
                 },
-                Err(install::Failure::Other(m)) => Stage::Failed { message: m, admin: None },
+                Err(install::Failure::Other(m)) => Stage::Failed { message: m, admin: None, link: None },
             };
+            ctx.request_repaint();
+        });
+    }
+
+    /// the updater's newer release put in place of this one, and started instead
+    fn update_self(&self, ctx: &egui::Context, release: Release) {
+        let shared = self.shared.clone();
+        let ctx = ctx.clone();
+        shared.lock().unwrap().stage = Stage::Working {
+            what: format!("Updating the updater to {}", release.version),
+            fraction: 0.0,
+            detail: "Starting...".into(),
+        };
+
+        std::thread::spawn(move || {
+            let result = self_update::update(&release, |step| progress(&shared, &ctx, step));
+            let failed = |message: String| Stage::Failed { message, admin: None, link: Some(self_update::RELEASES_PAGE) };
+            let stage = match result {
+                Ok(exe) => match self_update::start(&exe) {
+                    Ok(()) => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        return;
+                    }
+                    Err(m) => failed(m),
+                },
+                Err(install::Failure::NeedsAdmin(m)) => failed(format!(
+                    "The updater is in a folder it can't change without administrator rights. Download the new one from GitHub, or carry on with this one.\n\n{m}"
+                )),
+                Err(install::Failure::Other(m)) => failed(format!("{m}\n\nDownload the new updater from GitHub, or carry on with this one.")),
+            };
+            shared.lock().unwrap().stage = stage;
             ctx.request_repaint();
         });
     }
@@ -178,6 +211,24 @@ impl App {
             }
         };
     }
+}
+
+/// how far a download and unpacking have got, shown
+fn progress(shared: &Mutex<Shared>, ctx: &egui::Context, step: install::Step) {
+    let (fraction, detail) = match step {
+        install::Step::Downloading { done, total } => (
+            0.85 * done as f32 / total.max(1) as f32,
+            format!("Downloading... {:.1} of {:.1} MB", done as f64 / 1e6, total as f64 / 1e6),
+        ),
+        install::Step::Unpacking { done, total } => {
+            (0.85 + 0.15 * done as f32 / total.max(1) as f32, format!("Putting the files in place... {done} of {total}"))
+        }
+    };
+    if let Stage::Working { fraction: f, detail: d, .. } = &mut shared.lock().unwrap().stage {
+        *f = fraction;
+        *d = detail;
+    }
+    ctx.request_repaint();
 }
 
 fn style(ctx: &egui::Context) {
@@ -224,6 +275,7 @@ enum Action {
     Install(PathBuf),
     Pick,
     Admin(PathBuf),
+    UpdateSelf(Release),
 }
 
 impl eframe::App for App {
@@ -249,7 +301,7 @@ impl eframe::App for App {
                 }
                 ui.hyperlink_to(RichText::new("Releases on GitHub").small(), github::RELEASES_PAGE);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).small().weak());
+                    ui.label(RichText::new(self_update::VERSION).small().weak());
                 });
             });
             ui.add_space(2.0);
@@ -291,9 +343,40 @@ impl eframe::App for App {
                         action = Action::Close;
                     }
                 }
-                Stage::Failed { message, admin } => {
+                Stage::NewUpdater(newer) => {
+                    ui.label(RichText::new(format!("A new updater is out: {}", newer.version)).heading());
+                    ui.label(format!("You have {}. The new one takes this one's place and opens.", self_update::VERSION));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if primary(ui, "Update the updater") {
+                            action = Action::UpdateSelf(newer.clone());
+                        }
+                        if ui.button("Not now").clicked() {
+                            action = Action::Back;
+                        }
+                    });
+                    let current = version::Version::parse(self_update::VERSION);
+                    let has_notes = s
+                        .own_releases
+                        .iter()
+                        .any(|r| current.as_ref().is_none_or(|c| c.is_older_than(&r.version)) && !r.notes.trim().is_empty());
+                    if has_notes {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("What's new").strong());
+                        let notes = github::notes_since(&s.own_releases, current.as_ref());
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                                egui_commonmark::CommonMarkViewer::new().show(ui, &mut self.notes_cache, &notes);
+                            });
+                        });
+                    }
+                }
+                Stage::Failed { message, admin, link } => {
                     ui.label(RichText::new("That didn't work").heading().color(BAD));
                     ui.label(message);
+                    if let Some(link) = link {
+                        ui.hyperlink_to("Download it from GitHub", *link);
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if let Some(path) = admin {
@@ -401,9 +484,10 @@ impl eframe::App for App {
             Action::Admin(path) => match install::restart_as_admin(&path) {
                 Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 Err(e) => {
-                    self.shared.lock().unwrap().stage = Stage::Failed { message: e, admin: None };
+                    self.shared.lock().unwrap().stage = Stage::Failed { message: e, admin: None, link: None };
                 }
             },
+            Action::UpdateSelf(release) => self.update_self(&ctx, release),
         }
     }
 }
@@ -417,9 +501,14 @@ fn main() -> eframe::Result {
         }
     }
 
+    self_update::clean_up();
+
+    let mut viewport = egui::ViewportBuilder::default().with_title("OpenJK-rpmod Updater");
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+        viewport = viewport.with_icon(Arc::new(icon));
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("OpenJK-rpmod Updater")
+        viewport: viewport
             .with_inner_size([640.0, 560.0])
             .with_min_inner_size([480.0, 360.0]),
         ..Default::default()

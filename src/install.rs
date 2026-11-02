@@ -21,7 +21,7 @@ pub enum Failure {
     Other(String),
 }
 
-fn io_failure(path: &Path, e: io::Error) -> Failure {
+pub(crate) fn io_failure(path: &Path, e: io::Error) -> Failure {
     let message = format!("{}: {e}", path.display());
     if e.kind() == io::ErrorKind::PermissionDenied {
         Failure::NeedsAdmin(message)
@@ -43,7 +43,7 @@ pub fn game_running() -> bool {
 }
 
 /// whether GameData takes new files
-fn check_writable(game_data: &Path) -> Result<(), Failure> {
+pub(crate) fn check_writable(game_data: &Path) -> Result<(), Failure> {
     let probe = game_data.join(".openjk-rpmod-updater-probe");
     fs::write(&probe, b"").map_err(|e| io_failure(game_data, e))?;
     let _ = fs::remove_file(&probe);
@@ -51,7 +51,7 @@ fn check_writable(game_data: &Path) -> Result<(), Failure> {
 }
 
 /// a path from the archive, only when it stays inside GameData
-fn safe_relative(path: &Path) -> Option<PathBuf> {
+pub(crate) fn safe_relative(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in path.components() {
         match part {
@@ -141,7 +141,7 @@ fn open_tar(archive: &Path) -> Result<tar::Archive<flate2::read::GzDecoder<fs::F
     Ok(tar::Archive::new(flate2::read::GzDecoder::new(file)))
 }
 
-fn damaged(e: io::Error) -> Failure {
+pub(crate) fn damaged(e: io::Error) -> Failure {
     Failure::Other(format!("The download is damaged ({e})"))
 }
 
