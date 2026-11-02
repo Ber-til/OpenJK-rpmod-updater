@@ -159,7 +159,7 @@ fn put_in_place(download: &Path, exe: &Path) -> Result<(), Failure> {
     let mut found = false;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| Failure::Other(format!("The download is damaged ({e})")))?;
-        let name = entry.name().replace('\\', "/");
+        let Ok(name) = entry.name().map(|n| n.replace('\\', "/")) else { continue };
         if entry.is_dir() || name.starts_with("__MACOSX/") || name.rsplit('/').next().is_some_and(|n| n.starts_with("._")) {
             continue;
         }
