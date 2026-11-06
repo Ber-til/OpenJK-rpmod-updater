@@ -1,6 +1,6 @@
 [package]
 name = "openjk-rpmod-updater"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Installs and updates OpenJK-rpmod"
 license = "GPL-2.0"

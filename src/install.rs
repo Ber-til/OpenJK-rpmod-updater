@@ -32,14 +32,23 @@ pub(crate) fn io_failure(path: &Path, e: io::Error) -> Failure {
 
 /// the game running: its files can't be replaced
 pub fn game_running() -> bool {
-    use sysinfo::{ProcessesToUpdate, System};
+    use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 
     let Ok(mut system) = System::new() else { return false };
+    let me = get_current_pid().ok();
     system.refresh_processes(ProcessesToUpdate::All, true);
-    system.processes().values().any(|p| {
-        let name = p.name().to_string_lossy().to_lowercase();
-        name.starts_with("openjk") && !name.contains("updater")
+    system.processes().iter().any(|(pid, p)| {
+        Some(*pid) != me && is_game(&p.name().to_string_lossy(), p.exe().and_then(|e| e.file_name()).map(|f| f.to_string_lossy()).as_deref())
     })
+}
+
+/// a process that's the game (openjk.x86, openjk.x86_64, openjk.arm64...), by its program's file
+/// name where it's known, else by its name. Never the updater: Linux cuts a process's name to 15
+/// letters, so OpenJK-rpmod-Updater is "OpenJK-rpmod-Up" there, and nothing of the game is called
+/// openjk-rpmod
+fn is_game(name: &str, exe: Option<&str>) -> bool {
+    let name = exe.unwrap_or(name).to_lowercase();
+    name.starts_with("openjk") && !name.starts_with("openjk-rpmod") && !name.contains("updater")
 }
 
 /// whether GameData takes new files
@@ -200,6 +209,20 @@ pub fn restart_as_admin(_game_data: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_game_is_found_and_the_updater_is_not() {
+        assert!(is_game("openjk.x86.exe", None));
+        assert!(is_game("openjk.x86_64", Some("openjk.x86_64")));
+        assert!(is_game("openjk.arm64", None));
+        assert!(is_game("openjkded.x86", None));
+        // the updater: its whole name, Linux's 15 letters of it, or its program's name
+        assert!(!is_game("OpenJK-rpmod-Updater.exe", None));
+        assert!(!is_game("OpenJK-rpmod-Up", None));
+        assert!(!is_game("OpenJK-rpmod-Up", Some("OpenJK-rpmod-Updater")));
+        assert!(!is_game("bash", None));
+        assert!(!is_game("steam", Some("steam")));
+    }
 
     /// the newest release into a made-up GameData, the game's own file there kept
     /// (cargo test -- --ignored: it downloads)
